@@ -264,6 +264,9 @@ async function initiateStkPush(phone, amount, orderId) {
 // ── Auth (login, register, OTP, referral) ──────────────────────────────────
 const { router: authRouter, buildUserPayload } = require('./auth');
 app.use('/api/v1/auth', authRouter);
+const downloadRoutes = require('./downloadRoutes');
+app.set('io', io);
+app.use('/api/v1/apk', downloadRoutes);
 
 app.get('/api/v1/auth/profile', auth(), async (req, res) => {
   res.json(req.user);
@@ -970,7 +973,7 @@ app.get('/api/v1/raiders', auth(['manager', 'admin']), async (req, res) => {
   }
   const riders = await User.find(filter).select('-password');
   const result = await Promise.all(riders.map(async c => {
-    const orderCount = await Order.countDocuments({ clientId: c._id });
+  const orderCount = await Order.countDocuments({ clientId: c._id });
     return { id: c._id, name: c.name, email: c.email, phone: c.phone, zoneId: c.zoneId, walletBalance: c.walletBalance, orderCount, isVerified: c.isVerified, isAdminVerified: c.isAdminVerified, isManagerVerified: c.isManagerVerified };
   }));
   res.json(result);

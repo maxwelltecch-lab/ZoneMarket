@@ -607,5 +607,25 @@ router.post('/referral/update-activity', async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { phone, newPassword } = req.body;
+    if (!phone || !newPassword) return res.status(400).json({ message: 'Phone and new password are required' });
+
+    const User = mongoose.model('User');
+    const user = await User.findOne({ phone });
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const hashed = await bcrypt.hash(newPassword, 12);
+    user.password = hashed;
+    await user.save();
+
+    res.json({ success: true, message: 'Password reset successfully' });
+  } catch (e) {
+    console.error('Reset password error:', e);
+    res.status(500).json({ message: e.message });
+  }
+});
+
 
 module.exports = { router, Otp, Referral2, buildUserPayload, generateReferralCode };
