@@ -75,6 +75,7 @@ const UserSchema = new mongoose.Schema({
   pushToken: String,
   managerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   avatar: String,
+  googleId: { type: String, default: null },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // manager created by admin
 }, { timestamps: true });
 
@@ -160,6 +161,7 @@ const OrderSchema = new mongoose.Schema({
   total: Number,
   adminCommission: Number, // % of total goes to admin
   managerEarning: Number, // remainder to manager
+  riderEarning: Number, // 2% of managerEarning goes to rider
   status: {
     type: String,
     enum: ['pending', 'confirmed', 'dispatched', 'delivered', 'cancelled'],
@@ -262,7 +264,7 @@ async function initiateStkPush(phone, amount, orderId) {
 }
 
 // ── Auth (login, register, OTP, referral) ──────────────────────────────────
-const { router: authRouter, buildUserPayload } = require('./auth');
+const { router: authRouter, updateReferralActivity } = require('./auth');
 app.use('/api/v1/auth', authRouter);
 const downloadRoutes = require('./downloadRoutes');
 app.set('io', io);
@@ -425,6 +427,7 @@ app.post('/api/v1/orders', auth(['client']), async (req, res) => {
   const total = subtotal + deliveryFee;
   const adminCommission = total * ADMIN_COMMISSION_RATE;
   const managerEarning = total - adminCommission;
+  const riderEarning = managerEarning * 0.02; // 2% for rider
   const reference = 'ORD' + Date.now();
 
   // Find manager for this zone
@@ -432,19 +435,19 @@ app.post('/api/v1/orders', auth(['client']), async (req, res) => {
 
   // Find if any pending orders for this client
   const pendingOrder = await Order.findOne({ clientId: req.user._id, status: 'pending' });
-  if (pendingOrder) {
-    return res.status(400).json({ message: 'You have a pending order' });
+  if (pendingOrder > 2) {
+    return res.status(400).json({ message: 'You have a pending orders' });
   }
 
 
   const order = await Order.create({
     reference, clientId: req.user._id, managerId: manager?._id,
     zoneId: req.user.zoneId, items, subtotal, deliveryFee, total,
-    adminCommission, managerEarning, paymentMethod, deliveryLocation,
+    adminCommission, managerEarning, riderEarning, paymentMethod, deliveryLocation,
     estimatedDelivery: new Date(Date.now() + 35 * 60000),
     trackingUpdates: [{ status: 'pending', time: new Date(), note: 'Order placed' }],
   });
-
+  updateReferralActivity(req.user._id); // Update referral activity for the client
 
   const newNotification = new Notification({
     title: "New Order Received",
@@ -479,6 +482,11 @@ const order = await Order.findOne({
 
 app.get('/api/v1/orders/manager/:managerId', auth(['manager', 'admin', 'rider']), async (req, res) => {
   const orders = await Order.find({ managerId: req.params.managerId }).sort({ createdAt: -1 }).populate('clientId', 'name phone');
+  res.json({ orders: orders.map(o => ({ ...o.toObject(), clientName: o.clientId?.name, itemCount: o.items?.length || 0, timeAgo: getTimeAgo(o.createdAt) })) });
+});
+
+app.get('/api/v1/orders/rider/:riderId', auth(['manager', 'admin', 'rider']), async (req, res) => {
+  const orders = await Order.find({ raiderId: req.params.riderId }).sort({ createdAt: -1 }).populate('clientId', 'name phone');
   res.json({ orders: orders.map(o => ({ ...o.toObject(), clientName: o.clientId?.name, itemCount: o.items?.length || 0, timeAgo: getTimeAgo(o.createdAt) })) });
 });
 
@@ -598,20 +606,16 @@ console.log("Monthly stats:", monthlyStats);
 }
 });
 
-app.put('/api/v1/orders/:id/status', auth(['manager', 'admin']), async (req, res) => {
+app.put('/api/v1/orders/:id/status', auth(['manager', 'admin', 'rider']), async (req, res) => {
   const { status } = req.body;
-  const order = await Order.findByIdAndUpdate(req.params.id, {
-    status,
-    $push: { trackingUpdates: { status, time: new Date(), note: `Order ${status}` } },
-    ...(status === 'delivered' ? { deliveredAt: new Date() } : {}),
-  }, { new: true });
-
+  const raiderId = req.user.role === 'rider' ? req.user._id : null;
+  const order = await Order.findByIdAndUpdate(req.params.id, {raiderId, status, $push: { trackingUpdates: { status, time: new Date(), note: `Order ${status}` } }, ...(status === 'delivered' ? { deliveredAt: new Date() } : {})}, { new: true });
   // On delivery: distribute earnings
   if (status === 'delivered') {
     await User.findByIdAndUpdate(order.managerId, { $inc: { walletBalance: order.managerEarning, totalEarnings: order.managerEarning } });
     const admin = await User.findOne({ role: 'admin' });
     if (admin) await User.findByIdAndUpdate(admin._id, { $inc: { adminCommission: order.adminCommission } });
-
+    await Transaction.create({ userId: order.raiderId, type: 'earning', amount: order.deliveryFee, description: `Delivery fee for order ${order.reference}`, status: 'completed', orderId: order._id, zoneId: order.zoneId });
     await Transaction.create({ userId: order.managerId, type: 'earning', amount: order.managerEarning, description: `Earning from order ${order.reference}`, status: 'completed', orderId: order._id, zoneId: order.zoneId });
     await Transaction.create({ userId: admin._id, type: 'commission', amount: order.adminCommission, description: `Commission from order ${order.reference}`, status: 'completed', orderId: order._id, zoneId: order.zoneId });
   }
@@ -621,7 +625,7 @@ app.put('/api/v1/orders/:id/status', auth(['manager', 'admin']), async (req, res
 
   const [clientDoc, managerDoc] = await Promise.all([
     User.findById(order.clientId),
-    User.findById(order.managerId)]);
+    User.findById(order.raiderId)]);
   const ref = order.reference;
   const oid = order._id.toString();
 
@@ -655,9 +659,9 @@ app.put('/api/v1/orders/:id/status', auth(['manager', 'admin']), async (req, res
 });
 
 app.get('/api/v1/orders/:id/track', auth(), async (req, res) => {
-  const order = await Order.findById(req.params.id).populate('managerId', 'name phone');
+  const order = await Order.findById(req.params.id).populate('raiderId', 'name phone');
   if (!order) return res.status(404).json({ message: 'Order not found' });
-  res.json({ status: order.status, updates: order.trackingUpdates, manager: order.managerId, estimatedDelivery: order.estimatedDelivery, deliveredAt: order.deliveredAt });
+  res.json({ status: order.status, updates: order.trackingUpdates, manager: order.raiderId, estimatedDelivery: order.estimatedDelivery, deliveredAt: order.deliveredAt });
 });
 
 app.post('/api/v1/orders/:id/cancel', auth(), async (req, res) => {
@@ -941,7 +945,7 @@ app.get('/api/v1/clients', auth(['manager', 'admin']), async (req, res) => {
     filter.isVerified = 'true';
   }
   if (req.query.managerId) {
-    const orders = await Order.distinct('clientId', { managerId: req.query.managerId });
+    const orders = await Order.distinct('clientId', {  managerId: req.query.managerId });
     filter._id = { $in: orders };
   }
   const clients = await User.find(filter).select('-password');
@@ -951,6 +955,24 @@ app.get('/api/v1/clients', auth(['manager', 'admin']), async (req, res) => {
   }));
   res.json(result);
 });
+
+app.get('/api/v1/rider-clients', auth(['manager', 'admin', 'rider']), async (req, res) => {
+  const filter = { role: 'client' };
+  if(req.user._id){
+    filter.isVerified = 'true';
+  }
+  if (req.query.managerId) {
+    const orders = await Order.distinct('clientId', {  raiderId: req.query.managerId });
+    filter._id = { $in: orders };
+  }
+  const clients = await User.find(filter).select('-password');
+  const result = await Promise.all(clients.map(async c => {
+  const orderCount = await Order.countDocuments({ clientId: c._id });
+    return { id: c._id, name: c.name, email: c.email, phone: c.phone, zoneId: c.zoneId, walletBalance: c.walletBalance, orderCount, isVerified: c.isVerified, isAdminVerified: c.isAdminVerified, isManagerVerified: c.isManagerVerified };
+  }));
+  res.json(result);
+});
+
 
 app.post('/api/v1/clients', auth(['manager']), async (req, res) => {
   try {
@@ -964,9 +986,6 @@ app.post('/api/v1/clients', auth(['manager']), async (req, res) => {
 
 app.get('/api/v1/raiders', auth(['manager', 'admin']), async (req, res) => {
   const filter = { role: 'rider' };
-  if(req.user._id){
-    filter.isVerified = 'true';
-  }
   if (req.query.managerId) {
     const orders = await Order.distinct('clientId', { managerId: req.query.managerId });
     filter._id = { $in: orders };
@@ -985,12 +1004,23 @@ app.get('/api/v1/raiders/:id', auth(['manager', 'admin']), async (req, res) => {
   res.json({ id: m._id, name: m.name, email: m.email, phone: m.phone, zone: m.zoneId, balance: m.walletBalance, isVerified: m.isVerified, isAdminVerified: m.isAdminVerified, isManagerVerified: m.isManagerVerified });
 });
 
+app.post('/api/v1/raiders/:id/update', auth(['manager', 'admin']), async (req, res) => {
+  try {
+    const { name, email, phone, zoneId } = req.body;
+    const rider = await User.findByIdAndUpdate(req.params.id, { name, email, phone, zoneId, managerId: req.user._id }, { new: true });
+    if (!rider) return res.status(404).json({ message: 'Rider not found' });
+    res.json({ success: true, rider });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
 app.post('/api/v1/raiders', auth(['manager']), async (req, res) => {
   try {
     const { name, email, password, phone, zoneId, userName } = req.body;
     if (await User.findOne({ email })) return res.status(400).json({ message: 'Email already exists' });
     const hashed = await bcrypt.hash(password, 12);
-    const user = await User.create({ name, email: email.toLowerCase(), password: hashed, phone, role: 'rider', zoneId, createdBy: req.user._id, userName: userName || email.split('@')[0] });
+    const user = await User.create({ name, email: email.toLowerCase(), password: hashed, phone, role: 'rider', zoneId, managerId: req.user._id, createdBy: req.user._id, userName: userName || email.split('@')[0] });
     res.status(201).json({ id: user._id, name: user.name, email: user.email, role: user.role });
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
@@ -1015,7 +1045,7 @@ app.get('/api/v1/clients/all', auth(['admin']), async (req, res) => {
   res.json(result);
 });
 
-app.get('/api/v1/clients/:id', auth(['manager', 'admin']), async (req, res) => {
+app.get('/api/v1/clients/:id', auth(['manager', 'admin', 'rider']), async (req, res) => {
   const m = await User.findById(req.params.id).populate('zoneId', 'name');
   if (!m) return res.status(404).json({ message: 'Client not found' });
   res.json({ id: m._id, name: m.name, email: m.email, phone: m.phone, zone: m.zoneId, balance: m.walletBalance, isVerified: m.isVerified, isAdminVerified: m.isAdminVerified, isManagerVerified: m.isManagerVerified });

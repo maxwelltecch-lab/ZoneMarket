@@ -76,4 +76,21 @@ router.get('/stats', async (req, res) => {
   }
 });
 
+router.post('/verify', async (req, res) => {
+  try {
+    const { code } = req.body;
+    if (!code) {
+      return res.status(400).json({ error: 'Code is required' });
+    }
+    if (code === 'zonemarket2024') { 
+      return res.json({ valid: true });
+    }else {
+      return res.json({ valid: false });
+    }
+  } catch (err) {
+    return res.status(500).json({ error: 'Could not verify code' });
+  }
+});
+
+
 module.exports = router;

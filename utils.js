@@ -1,13 +1,28 @@
-const AfricasTalking = require("africastalking")({
-  apiKey: process.env.AT_API_KEY,
-  username: process.env.AT_USERNAME
+const nodemailer = require("nodemailer");
+
+const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: process.env.SMTP_PORT,
+    secure: true,
+
+    auth:{
+        user:process.env.SMTP_USER,
+        pass:process.env.SMTP_PASS
+    }
 });
 
-const sms = AfricasTalking.SMS;
+exports.sendEmail = async (email,subject,html)=>{
 
-exports.sendSMS = async (phone, message) => {
-  await sms.send({
-    to: [phone],
-    message
-  });
+    await transporter.sendMail({
+
+        from:`ZoneMarket <${process.env.SMTP_USER}>`,
+
+        to:email,
+
+        subject,
+
+        html
+
+    });
+
 };
