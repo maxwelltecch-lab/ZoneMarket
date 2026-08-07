@@ -4,8 +4,7 @@ const mongoose = require('mongoose');
 const bcrypt   = require('bcryptjs');
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 
-const URI = 'mongodb+srv://brianrotich909_db_user:R86q2IGJdyWj777t@cluster0.3iyvfrr.mongodb.net/?appName=Cluster0';
-
+const URI = process.env.MONGO_URI || 'mongodb://localhost/zonemarket';
 const UserSchema = new mongoose.Schema({ name:String, email:String, password:String, phone:String, role:String, zoneId:mongoose.Schema.Types.ObjectId, walletBalance:{type:Number,default:0}, adminCommission:{type:Number,default:0}, totalEarnings:{type:Number,default:0}, isActive:{type:Boolean,default:true}, isVerified:{type:Boolean,default:true} }, { timestamps:true });
 const ZoneSchema = new mongoose.Schema({ name:String, description:String, center:{lat:Number,lng:Number}, radius:{type:Number,default:5000}, isActive:{type:Boolean,default:true} });
 const ProductSchema = new mongoose.Schema({ name:String, description:String, price:Number, originalPrice:Number, discount:Number, stock:Number, category:String, images:[String], managerId:mongoose.Schema.Types.ObjectId, zoneId:mongoose.Schema.Types.ObjectId, likes:[mongoose.Schema.Types.ObjectId], isNew:{type:Boolean,default:false}, isHot:{type:Boolean,default:false}, hasPromotion:{type:Boolean,default:false}, isActive:{type:Boolean,default:true} }, { timestamps:true });
