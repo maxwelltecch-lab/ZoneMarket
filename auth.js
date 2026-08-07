@@ -21,8 +21,6 @@
 //
 // ───────────────────────────────────────────────────────────────────────────
 const { sendEmail } = require('./utils');
-//const sendEmail = require('./utils');
-const { auth } = require("./config/firebase");
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
@@ -657,49 +655,6 @@ router.post('/verify-update', async (req, res) => {
     console.error('Change password error:', e);
     res.status(500).json({ message: e.message });
   }
-});
-
-router.post('/google-login', async (req, res) => {
-
-  try {
-    const { idToken } = req.body;
-    console.log(idToken);
-
-    if (!idToken) {
-      return res.status(400).json({ message: "Google ID token required", });
-    }
-
-    const decoded = await auth.verifyIdToken(idToken);
-
-    const User = mongoose.model("User");
-
-    let user = await User.findOne({ email: decoded.email.toLowerCase(), });
-
-    if (!user) {
-      user = await User.create({
-        name: decoded.name,
-        email: decoded.email.toLowerCase(),
-        avatar: decoded.picture,
-        googleId: decoded.uid,
-        role: "client",
-        isVerified: true,
-        isActive: true,
-      });
-    } else {
-      user.googleId = decoded.uid;
-      user.avatar = decoded.picture;
-      user.isVerified = true;
-      await user.save();
-    }
-    const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: "12h", });
-    return res.json({ success: true, token, user: buildUserPayload(user), });
-
-  } catch (error) {
-    console.error(error);
-    return res.status(401).json({ message: "Google authentication failed", });
-
-  }
-
 });
 
 
