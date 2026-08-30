@@ -279,6 +279,7 @@ router.get('/promos', async (req, res) => {
 // Create promo (admin or manager)
 router.post('/promos', async (req, res) => {
   try {
+    console.log(req.body);
     const User  = mongoose.model('User');
     const user  = await User.findById(req.user._id).select('zoneId');
     const promo = await Promo.create({

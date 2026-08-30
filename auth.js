@@ -163,6 +163,7 @@ function buildUserPayload(user) {
     adminCommission: user.adminCommission || 0,
     isVerified: user.isVerified, avatar: user.avatar,
     managerId: user.managerId, createdAt: user.createdAt,
+    isRegistered: user.isRegistered,
   };
 }
 
@@ -291,7 +292,8 @@ router.post('/register', async (req, res) => {
     await Otp.deleteMany({ userId: user._id, purpose: 'verify_register' });
     await Otp.create({ userId: user._id, phone: cleanPhone, code, purpose: 'verify_register', expiresAt: new Date(Date.now() + 20 * 60 * 1000) });
     //await sendSms(cleanPhone, `ZoneMarket: Your verification code is ${code}. Expires in 20 minutes. DO NOT share it.`);
-    await sendEmail(cleanEmail, 'ZoneMarket Account Verification', `<p>Hello ${name},</p><p>Your verification code is <strong>${code}</strong>. It expires in 20 minutes. DO NOT share this code with anyone.</p><p>Thank you for joining ZoneMarket!</p>`);
+    /*await sendEmail(cleanEmail, 'ZoneMarket Account Verification', `<p>Hello ${name},</p><p>Your verification code is <strong>${code}</strong>. It expires in 20 minutes. DO NOT share this code with anyone.</p><p>Thank you for joining ZoneMarket!</p>`);*/
+    console.log(`Registration OTP for ${user.email}: ${code}`);
     res.status(201).json({
       success: true,
       userId: user._id,
@@ -324,7 +326,7 @@ router.post('/login', async (req, res) => {
     const user = await User.findOne({
       $or: [
         { email: id.toLowerCase() },
-        { username: id.toLowerCase() },
+        { userName: id.toLowerCase() },
       ],
     }).populate('zoneId', 'name');
 
@@ -333,13 +335,15 @@ router.post('/login', async (req, res) => {
     const pwOk = await bcrypt.compare(password, user.password);
     if (!pwOk) return res.status(401).json({ message: 'Incorrect password.' });
 
+
+
     if (!user.isActive && !user.isVerified) {
       // Not yet verified — resend register OTP
       const code = generateOtp();
       await Otp.deleteMany({ userId: user._id, purpose: 'verify_register' });
       await Otp.create({ userId: user._id, phone: user.phone, code, purpose: 'verify_register', expiresAt: new Date(Date.now() + 20 * 60 * 1000) });
       //await sendSms(user.phone, `ZoneMarket: Verify your account. Code: ${code}. Valid 20 mins.`);
-      await sendEmail(user.email, 'ZoneMarket Account Verification', `<p>Hello ${user.name},</p><p>Your verification code is <strong>${code}</strong>. It expires in 20 minutes. DO NOT share this code with anyone.</p><p>Thank you for joining ZoneMarket!</p>`);
+      /* await sendEmail(user.email, 'ZoneMarket Account Verification', `<p>Hello ${user.name},</p><p>Your verification code is <strong>${code}</strong>. It expires in 20 minutes. DO NOT share this code with anyone.</p><p>Thank you for joining ZoneMarket!</p>`);*/
       return res.json({ requiresVerification: true, userId: user._id, phone: maskPhone(user.email), message: 'Account not verified. A new code has been sent to your email.' });
     }
 
@@ -354,6 +358,9 @@ router.post('/login', async (req, res) => {
         hint: 'Enter a valid referral code from your manager to restore access.',
       });
     }
+
+
+
     // For clients: check referral access
     if (user.role === 'client') {
       const access = await checkClientAccess(user);
@@ -368,6 +375,8 @@ router.post('/login', async (req, res) => {
             message: 'Referral code is required to reactivate your account. Ask your manager for a valid code.',
           });
         }
+
+
         const newRef = await Referral2.findOne({ code: referralCode.toUpperCase(), isActive: true });
         if (!newRef) {
           return res.status(400).json({
@@ -388,16 +397,29 @@ router.post('/login', async (req, res) => {
           isActive: true,
         });
         // Fall through to send login OTP
+      if (!user.isRegistered) {
+        return res.status(403).json({
+          needsPayments: true,
+          reason: 'suspended',
+          userId: user._id,
+          phone: user.phone,
+          email: user.email,
+          message: 'You have not yet paid the the registration fee, pay first to continue..',
+        });
+      }
 
       }
+
+     
     }
+
 
     // Send login OTP
     const code = generateOtp();
     await Otp.deleteMany({ userId: user._id, purpose: 'verify_login' });
     const otp = await Otp.create({ userId: user._id, phone: user.phone, code, purpose: 'verify_login', expiresAt: new Date(Date.now() + 20 * 60 * 1000) });
     // await sendSms(user.phone, `ZoneMarket login code: ${code}\nValid 20 minutes. Never share this code with anyone.`);
-    await sendEmail(user.email, 'ZoneMarket Login Code', `<p>Hello ${user.name},</p><p>Your login code is <strong>${code}</strong>. It expires in 20 minutes. Never share this code with anyone.</p>`);
+    /*await sendEmail(user.email, 'ZoneMarket Login Code', `<p>Hello ${user.name},</p><p>Your login code is <strong>${code}</strong>. It expires in 20 minutes. Never share this code with anyone.</p>`);*/
     console.log(`Login OTP for ${user.email}: ${code}`); // Log OTP for testing without SMS
     res.json({
       success: true,
@@ -471,7 +493,7 @@ router.post('/resend-otp', async (req, res) => {
     const code = generateOtp();
     await Otp.create({ userId, phone: user.phone, code, purpose: purpose || 'verify_login', expiresAt: new Date(Date.now() + 20 * 60 * 1000) });
     //await sendSms(user.phone, `ZoneMarket: Your new code is ${code}. Expires in 20 minutes.`);
-
+    console.log(`Login OTP for ${user.email}: ${code}`);
     res.json({ success: true, message: `New code sent to ${maskPhone(user.email)} expires in 20 minutes.` });
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
@@ -616,7 +638,8 @@ router.post('/reset-password', async (req, res) => {
     const otpCode = generateOtp();
     await Otp.deleteMany({ userId: user._id, purpose: 'reset_password' });
     await Otp.create({ userId: user._id, phone: user.phone, code: otpCode, purpose: 'reset_password', expiresAt: new Date(Date.now() + 20 * 60 * 1000) });
-    sendEmail(email, 'ZoneMarket Password Reset', `<p>Hello ${user.name},</p><p>Your password reset code is <strong>${otpCode}</strong>. It expires in 20 minutes. DO NOT share this code with anyone.</p><p>If you did not request a password reset, please ignore this email.</p>`);
+    /*sendEmail(email, 'ZoneMarket Password Reset', `<p>Hello ${user.name},</p><p>Your password reset code is <strong>${otpCode}</strong>. It expires in 20 minutes. DO NOT share this code with anyone.</p><p>If you did not request a password reset, please ignore this email.</p>`);*/
+    console.log(`Reset Password OTP for ${user.email}: ${otpCode}`);
     res.json({ success: true, message: 'Password reset instructions sent to your email' });
   } catch (e) {
     console.error('Reset password error:', e);

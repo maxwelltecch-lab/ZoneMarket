@@ -191,4 +191,13 @@ module.exports = {
       { type: 'payment', amount },
       'payments'
     ),  
+
+   notifyRegistrationSuccess: (pushToken, reference,amount) =>
+    sendPushNotification(
+      pushToken,
+      '💰 Registration Successful',
+      `KSh ${amount.toLocaleString()} has been received for your registration.`,
+      { type: 'registration', amount },
+      'payments'
+    ),    
 };

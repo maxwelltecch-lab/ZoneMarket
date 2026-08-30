@@ -23,7 +23,7 @@ async function seed() {
   const hash = (p) => bcrypt.hash(p, 12);
 
   // Admin
-  const admin = await User.create({ name:'Super Admin', email:'Admin@zonemarket.com', password:await hash('Admin@2024'), phone:'0748175488', role:'admin', adminCommission:0, walletBalance:0 });
+  const admin = await User.create({ name:'Super Admin', email:'Admins@zonemarket.com', password:await hash('Admin@2024'), phone:'0748175488', role:'admin', adminCommission:0, userName: 'Super', walletBalance:0 });
 
   // Zones
  // const zoneA = await Zone.create({ name:'Zone A', description:'Section 58, Nakuru', center:{ lat:0.2850, lng:36.0900 }, radius:3000 });

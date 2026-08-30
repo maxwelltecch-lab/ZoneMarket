@@ -7,7 +7,7 @@ const Download = require('./models/Download');
 // Path to the APK file on disk. Update this whenever you ship a new build,
 // or better: keep the filename stable (zonemarket-latest.apk) and just
 // overwrite it on deploy so the download link never changes.
-const APK_PATH = path.join(__dirname, '..', 'backend', 'public', 'zonemarket-latest.apk');
+const APK_PATH = path.join(__dirname, 'public', 'zonemarket-latest.apk');
 
 // GET /api/apk/download
 // Logs the download event, then streams the file to the client.

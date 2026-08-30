@@ -15,7 +15,6 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
-
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -24,13 +23,14 @@ async function start() {
   try {
     await mongoose.connect('mongodb://127.0.0.1:27017/myZone?directConnection=true')
     console.log("db connected insert");
-    const hashed = await bcrypt.hash("demo1234", 12);
+    const hashed = await bcrypt.hash("Admin@2024", 12);
     const admin = new User({
-      name: "Demo Client",
-      email: "demo@zonemarket.com",
+      name: "Super Admin",
+      email: "admin@zonemarket.com",
       password: hashed,
       phone: "0748175477",
-      role: "client"
+      role: "admin",
+      userName: "admin"
     });
     await admin.save()
     console.log("admin created");
@@ -42,14 +42,7 @@ async function start() {
   }
 }
 
-
-// ── M-PESA CONFIG ────────────────────────────────────────────────────
-const MPESA_BASE = 'https://sandbox.safaricom.co.ke'; // change to api.safaricom.co.ke for production
-const MPESA_CONSUMER_KEY = process.env.MPESA_CONSUMER_KEY || '';
-const MPESA_CONSUMER_SEC = process.env.MPESA_CONSUMER_SECRET || '';
-const MPESA_SHORTCODE = process.env.MPESA_SHORTCODE || '174379';
-const MPESA_PASSKEY = process.env.MPESA_PASSKEY || '';
-const MPESA_CALLBACK_URL = process.env.MPESA_CALLBACK_URL || 'https://your-domain.com/api/v1/wallet/mpesa/callback';
+//start();
 
 mongoose.connect(process.env.MONGO_URI)
 //mongodb://127.0.0.1:27017/zonemarket?directConnection=true
@@ -113,9 +106,11 @@ const NotificationSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const VariantSchema = new mongoose.Schema({
-  formatType: { type: String, required: true,  enum: ['grams', 'blunts'] // Inaruhusu 'grams' au 'blunts' pekee
+  formatType: {
+    type: String, required: true, enum: ['grams', 'blunts', 'packets', 'pieces'] // Inaruhusu 'grams' au 'blunts' pekee
   },
-  measurementLabel: { type: String, required: true // Mfano: "1 Gram", "3 Grams", "1 Pre-Roll Blunt"
+  measurementLabel: {
+    type: String, required: true // Mfano: "1 Gram", "3 Grams", "1 Pre-Roll Blunt"
   },
   price: { type: Number, required: true },
   originalPrice: Number, // Ili uweze kuweka discount hadi kwenye kiwango cha variant
@@ -179,7 +174,7 @@ const OrderSchema = new mongoose.Schema({
 
 const TransactionSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  type: { type: String, enum: ['deposit', 'withdrawal', 'order_payment', 'commission', 'earning'] },
+  type: { type: String, enum: ['deposit', 'withdrawal', 'order_payment', 'commission', 'earning', 'registration_fee'] },
   amount: Number,
   balance: Number,
   reference: String,
@@ -193,10 +188,10 @@ const TransactionSchema = new mongoose.Schema({
 
 const CommentSchema = new mongoose.Schema({
   productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
-  userId:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  userName:  String,
-  text:      { type: String, required: true },
-  editedAt:  Date,
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  userName: String,
+  text: { type: String, required: true },
+  editedAt: Date,
 }, { timestamps: true });
 
 
@@ -229,38 +224,46 @@ const ADMIN_COMMISSION_RATE = 0.05; // 5% commission on each sale
 
 // ═══════════════════════════════════════════════════════════════════
 //  M-PESA HELPERS
-// ═══════════════════════════════════════════════════════════════════
 
-async function getMpesaToken() {
-  const creds = Buffer.from(`${MPESA_CONSUMER_KEY}:${MPESA_CONSUMER_SEC}`).toString('base64');
-  const res = await axios.get(`${MPESA_BASE}/oauth/v1/generate?grant_type=client_credentials`, {
-    headers: { Authorization: `Basic ${creds}` }
-  });
-  return res.data.access_token;
+const TUMA_URL = "https://api.tuma.co.ke";
+
+async function getTumaToken() {
+  const response = await axios.post(
+    `${TUMA_URL}/auth/token`,
+    {
+      email: process.env.TUMA_EMAIL,
+      api_key: process.env.TUMA_API_KEY,
+    },
+    {
+      headers: {
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  return response.data.data.token;
 }
 
-async function initiateStkPush(phone, amount, orderId) {
-  const token = await getMpesaToken();
-  const timestamp = new Date().toISOString().replace(/[-T:Z.]/g, '').slice(0, 14);
-  const password = Buffer.from(`${MPESA_SHORTCODE}${MPESA_PASSKEY}${timestamp}`).toString('base64');
+async function stkPush(phone, amount, description) {
+  const token = await getTumaToken();
 
-  // Format phone: 0712345678 → 254712345678
-  const formattedPhone = phone.startsWith('0') ? `254${phone.slice(1)}` : phone;
+  const response = await axios.post(
+    `${TUMA_URL}/payment/stk-push`,
+    {
+      amount,
+      phone,
+      callback_url: process.env.TUMA_CALLBACK_URL,
+      description,
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+    }
+  );
 
-  const res = await axios.post(`${MPESA_BASE}/mpesa/stkpush/v1/processrequest`, {
-    BusinessShortCode: MPESA_SHORTCODE,
-    Password: password,
-    Timestamp: timestamp,
-    TransactionType: 'CustomerPayBillOnline',
-    Amount: Math.ceil(amount),
-    PartyA: formattedPhone,
-    PartyB: MPESA_SHORTCODE,
-    PhoneNumber: formattedPhone,
-    CallBackURL: MPESA_CALLBACK_URL,
-    AccountReference: `ZM-${orderId || 'DEPOSIT'}`,
-    TransactionDesc: 'ZoneMarket Payment',
-  }, { headers: { Authorization: `Bearer ${token}` } });
-  return res.data;
+  return response.data;
 }
 
 // ── Auth (login, register, OTP, referral) ──────────────────────────────────
@@ -387,6 +390,7 @@ app.post('/api/v1/products', auth(['manager', 'admin']), async (req, res) => {
 
 app.put('/api/v1/products/:id', auth(['manager', 'admin']), async (req, res) => {
   const product = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true });
+
   res.json(product);
 });
 
@@ -426,8 +430,9 @@ app.post('/api/v1/orders', auth(['client']), async (req, res) => {
   const subtotal = items.reduce((s, i) => s + i.price * i.quantity, 0);
   const total = subtotal + deliveryFee;
   const adminCommission = total * ADMIN_COMMISSION_RATE;
-  const managerEarning = total - adminCommission;
-  const riderEarning = managerEarning * 0.02; // 2% for rider
+  const managerEarningz = total - adminCommission;
+  const riderEarning = managerEarningz * 0.02; // 2% for rider
+  const managerEarning = managerEarningz - riderEarning;
   const reference = 'ORD' + Date.now();
 
   // Find manager for this zone
@@ -435,8 +440,8 @@ app.post('/api/v1/orders', auth(['client']), async (req, res) => {
 
   // Find if any pending orders for this client
   const pendingOrder = await Order.findOne({ clientId: req.user._id, status: 'pending' });
-  if (pendingOrder > 2) {
-    return res.status(400).json({ message: 'You have a pending orders' });
+  if (pendingOrder > 5) {
+    return res.status(400).json({ message: 'You have exceeded the limit complete pending orders' });
   }
 
 
@@ -470,24 +475,24 @@ app.post('/api/v1/orders', auth(['client']), async (req, res) => {
 });
 
 app.get('/api/v1/orders/:id', auth(), async (req, res) => {
-const order = await Order.findOne({
-  _id: req.params.id,
-  zoneId: req.user.zoneId,
-})
-  .populate('clientId', 'name phone')
-  .populate('managerId', 'name phone');
+  const order = await Order.findOne({
+    _id: req.params.id,
+    zoneId: req.user.zoneId,
+  })
+    .populate('clientId', 'name phone')
+    .populate('managerId', 'name phone');
   if (!order) return res.status(404).json({ message: 'Order not found' });
   res.json({ ...order.toObject(), clientName: order.clientId?.name, clientPhone: order.clientId?.phone });
 });
 
 app.get('/api/v1/orders/manager/:managerId', auth(['manager', 'admin', 'rider']), async (req, res) => {
-  const orders = await Order.find({ managerId: req.params.managerId }).sort({ createdAt: -1 }).populate('clientId', 'name phone');
+  const orders = await Order.find({ managerId: req.params.managerId }).sort({ createdAt: -1 }).populate('clientId', 'name email phone');
   res.json({ orders: orders.map(o => ({ ...o.toObject(), clientName: o.clientId?.name, itemCount: o.items?.length || 0, timeAgo: getTimeAgo(o.createdAt) })) });
 });
 
 app.get('/api/v1/orders/rider/:riderId', auth(['manager', 'admin', 'rider']), async (req, res) => {
-  const orders = await Order.find({ raiderId: req.params.riderId }).sort({ createdAt: -1 }).populate('clientId', 'name phone');
-  res.json({ orders: orders.map(o => ({ ...o.toObject(), clientName: o.clientId?.name, itemCount: o.items?.length || 0, timeAgo: getTimeAgo(o.createdAt) })) });
+  const orders = await Order.find({ raiderId: req.params.riderId }).sort({ createdAt: -1 }).populate('clientId', 'name email phone');
+  res.json({ orders: orders.map(o => ({ ...o.toObject(), clientId: o.clientId?._id, clientName: o.clientId?.name, clientEmail: o.clientId?.email, clientPhone: o.clientId?.phone, itemCount: o.items?.length || 0, timeAgo: getTimeAgo(o.createdAt) })) });
 });
 
 app.get('/api/v1/orders/client/:clientId', auth(), async (req, res) => {
@@ -495,81 +500,81 @@ app.get('/api/v1/orders/client/:clientId', auth(), async (req, res) => {
   res.json({ orders: orders.map(o => ({ ...o.toObject(), itemCount: o.items?.length || 0 })) });
 });
 
-app.put('/api/v1/orders/:id/cancel', auth(), async (req,res) => {
-  const order = (await Order.findById({_id: req.params.id }));
-  if(!order) res.status(404).json({message: "Order not found"});
-  const newOrder = await Order.findByIdAndUpdate({_id: req.params.id}, {status: "cancelled", cancelReason: req.body.reason, $push: {trackingUpdates: {status: "cancelled", time: new Date(), note: req.body.reason}}}, {new: true});   
-  console.log('order cancelled success'+newOrder);
-  return res.json({success: true, newOrder})
+app.put('/api/v1/orders/:id/cancel', auth(), async (req, res) => {
+  const order = (await Order.findById({ _id: req.params.id }));
+  if (!order) res.status(404).json({ message: "Order not found" });
+  const newOrder = await Order.findByIdAndUpdate({ _id: req.params.id }, { status: "cancelled", cancelReason: req.body.reason, $push: { trackingUpdates: { status: "cancelled", time: new Date(), note: req.body.reason } } }, { new: true });
+  console.log('order cancelled success' + newOrder);
+  return res.json({ success: true, newOrder })
 })
 app.get('/api/v1/orders/top-products/:zoneId', auth(['manager', 'admin', 'rider']), async (req, res) => {
-  try{
-  const topProducts = await Order.aggregate([
-  { $match: { status: 'delivered' } }, // only completed orders
-  { $unwind: '$items' }, // break items array
-  {
-    $group: {
-      _id: '$items.productId',
-      name: { $first: '$items.name' },
-      totalSold: { $sum: '$items.quantity' },
-      totalRevenue: { $sum: { $multiply: ['$items.price', '$items.quantity'] } }
-    }
-  },
-  { $sort: { totalSold: -1 } }, // most sold first
-  { $limit: 10 } // top 10 products
-]); 
- res.json({ products: topProducts });
-}catch(err){
-  console.error("Error fetching top products:", err);
-  res.status(500).json({ message: 'Failed to fetch top products' });
-}
+  try {
+    const topProducts = await Order.aggregate([
+      { $match: { status: 'delivered' } }, // only completed orders
+      { $unwind: '$items' }, // break items array
+      {
+        $group: {
+          _id: '$items.productId',
+          name: { $first: '$items.name' },
+          totalSold: { $sum: '$items.quantity' },
+          totalRevenue: { $sum: { $multiply: ['$items.price', '$items.quantity'] } }
+        }
+      },
+      { $sort: { totalSold: -1 } }, // most sold first
+      { $limit: 10 } // top 10 products
+    ]);
+    res.json({ products: topProducts });
+  } catch (err) {
+    console.error("Error fetching top products:", err);
+    res.status(500).json({ message: 'Failed to fetch top products' });
+  }
 });
 
 app.get('/api/v1/orders/weekly-stats/:zoneId', auth(['manager', 'admin', 'rider']), async (req, res) => {
-  try{
-const startOfWeek = new Date();
-startOfWeek.setHours(0, 0, 0, 0);
+  try {
+    const startOfWeek = new Date();
+    startOfWeek.setHours(0, 0, 0, 0);
 
-// Set to Monday (or Sunday depending on your logic)
-const day = startOfWeek.getDay(); // 0 (Sun) - 6 (Sat)
-const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1);
-startOfWeek.setDate(diff);
+    // Set to Monday (or Sunday depending on your logic)
+    const day = startOfWeek.getDay(); // 0 (Sun) - 6 (Sat)
+    const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1);
+    startOfWeek.setDate(diff);
 
-const endOfWeek = new Date(startOfWeek);
-endOfWeek.setDate(startOfWeek.getDate() + 7);
+    const endOfWeek = new Date(startOfWeek);
+    endOfWeek.setDate(startOfWeek.getDate() + 7);
 
-const weeklyStats = await Order.aggregate([
-  {
-    $match: {
-      status: 'delivered', // or 'paid' depending on your logic
-      createdAt: {
-        $gte: startOfWeek,
-        $lt: endOfWeek
-      }
-    }
-  },
-  {
-    $group: {
-      _id: {
-        $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "Africa/Nairobi" }
+    const weeklyStats = await Order.aggregate([
+      {
+        $match: {
+          status: 'delivered', // or 'paid' depending on your logic
+          createdAt: {
+            $gte: startOfWeek,
+            $lt: endOfWeek
+          }
+        }
       },
-      orderCount: { $sum: 1 },
-      dailyRevenue: { $sum: "$total" }
-    }
-  },
-  { $sort: { _id: 1 } }
-]);
-console.log(`Weekly stats: ${weeklyStats.length}`);
- res.json({ stats: weeklyStats });
-}catch(err){
-  console.error("Error fetching weekly stats:", err);
-  console.log("Start of week:", startOfWeek, "End of week:", endOfWeek);
-  res.status(500).json({ message: 'Failed to fetch weekly stats' });
-}
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "Africa/Nairobi" }
+          },
+          orderCount: { $sum: 1 },
+          dailyRevenue: { $sum: "$total" }
+        }
+      },
+      { $sort: { _id: 1 } }
+    ]);
+
+    res.json({ stats: weeklyStats });
+  } catch (err) {
+    console.error("Error fetching weekly stats:", err);
+    console.log("Start of week:", startOfWeek, "End of week:", endOfWeek);
+    res.status(500).json({ message: 'Failed to fetch weekly stats' });
+  }
 });
 
 app.get('/api/v1/orders/monthly-stats/:zoneId', auth(['manager', 'admin', 'rider']), async (req, res) => {
-  try{
+  try {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
@@ -588,7 +593,7 @@ app.get('/api/v1/orders/monthly-stats/:zoneId', auth(['manager', 'admin', 'rider
               $dateToString: {
                 format: "%Y-%m-%d",
                 date: "$createdAt",
-                timezone: "Africa/Nairobi" // ✅ FIXES SHIFT
+                timezone: "Africa/Nairobi"
               }
             },
           },
@@ -598,24 +603,25 @@ app.get('/api/v1/orders/monthly-stats/:zoneId', auth(['manager', 'admin', 'rider
       },
       { $sort: { "_id.date": 1 } }
     ]);
-console.log("Monthly stats:", monthlyStats);
- res.json({ stats: monthlyStats });
-}catch(err){
-  console.error("Error fetching monthly stats:", err);
-  res.status(500).json({ message: 'Failed to fetch monthly stats' });
-}
+
+    res.json({ stats: monthlyStats });
+  } catch (err) {
+    console.error("Error fetching monthly stats:", err);
+    res.status(500).json({ message: 'Failed to fetch monthly stats' });
+  }
 });
 
 app.put('/api/v1/orders/:id/status', auth(['manager', 'admin', 'rider']), async (req, res) => {
   const { status } = req.body;
   const raiderId = req.user.role === 'rider' ? req.user._id : null;
-  const order = await Order.findByIdAndUpdate(req.params.id, {raiderId, status, $push: { trackingUpdates: { status, time: new Date(), note: `Order ${status}` } }, ...(status === 'delivered' ? { deliveredAt: new Date() } : {})}, { new: true });
+  const order = await Order.findByIdAndUpdate(req.params.id, { raiderId, status, $push: { trackingUpdates: { status, time: new Date(), note: `Order ${status}` } }, ...(status === 'delivered' ? { deliveredAt: new Date() } : {}) }, { new: true });
   // On delivery: distribute earnings
   if (status === 'delivered') {
     await User.findByIdAndUpdate(order.managerId, { $inc: { walletBalance: order.managerEarning, totalEarnings: order.managerEarning } });
+    await User.findOneAndUpdate(order.raiderId, { $inc: { walletBalance: order.riderEarning, totalEarning: order.riderEarning } });
     const admin = await User.findOne({ role: 'admin' });
     if (admin) await User.findByIdAndUpdate(admin._id, { $inc: { adminCommission: order.adminCommission } });
-    await Transaction.create({ userId: order.raiderId, type: 'earning', amount: order.deliveryFee, description: `Delivery fee for order ${order.reference}`, status: 'completed', orderId: order._id, zoneId: order.zoneId });
+    await Transaction.create({ userId: order.raiderId, type: 'earning', amount: order.riderEarning, description: `Earning from order ${order.reference} delivery.`, status: 'completed', orderId: order._id, zoneId: order.zoneId });
     await Transaction.create({ userId: order.managerId, type: 'earning', amount: order.managerEarning, description: `Earning from order ${order.reference}`, status: 'completed', orderId: order._id, zoneId: order.zoneId });
     await Transaction.create({ userId: admin._id, type: 'commission', amount: order.adminCommission, description: `Commission from order ${order.reference}`, status: 'completed', orderId: order._id, zoneId: order.zoneId });
   }
@@ -646,11 +652,11 @@ app.put('/api/v1/orders/:id/status', auth(['manager', 'admin', 'rider']), async 
   const newNotification = new Notification({
     title: 'Order Update',
     type: 'order_update',
-    body: 'Items ' + order.items.map(i => i.name).join(', ') + ' Total + Delivery : 100' + order.status + '',
+    body: 'Items (' + order.items.map(i => i.name).join(', ') + ') Total : Ksh ' + order.total + ' status - ' + order.status + '',
     recipients: [
       { user: order.clientId, isRead: false },
     ],
-    recipientRole: ['client', 'manager', 'admin'],
+    recipientRole: ['client', 'manager', 'admin', 'rider'],
     zoneId: order.zoneId,
   });
   await newNotification.save();
@@ -687,15 +693,22 @@ app.get('/api/v1/wallet/transactions', auth(), async (req, res) => {
 
 app.post('/api/v1/wallet/deposit', auth(), async (req, res) => {
   const { amount, method, phone } = req.body;
+  const reference = `Deposit-${Date.now()}`;
   if (method === 'mpesa') {
     // Initiate STK push via Daraja API
     // const stkRes = await initiateMpesaSTK(phone, amount);
     // Save pending transaction
     try {
-      const stkRes = await initiateStkPush(phone, amount, null);
-      console.log('STK Response:', stkRes);
-      const txn = await Transaction.create({ userId: req.user._id, type: 'deposit', amount, method: 'mpesa', status: 'pending', description: `M-Pesa deposit KSh ${amount}`, reference: stkRes.CheckoutRequestID, zoneId: req.user.zoneId });
-      return res.json({ pending: true, transactionId: txn._id, checkoutRequestId: stkRes.CheckoutRequestID, message: 'STK Push sent to your phone' });
+      if (!phone) {
+        return res.status(400).json({ message: 'Phone number is required for M-Pesa deposits' });
+      }
+      const stkRes = await stkPush(phone, amount, reference);
+      const isSuccessful = stkRes?.success === true;
+      if (!isSuccessful) {
+        return res.status(400).json({ message: 'Failed to initiate M-Pesa STK Push', details: stkRes });
+      }
+      const txn = await Transaction.create({ userId: req.user._id, type: 'deposit', amount, method: 'mpesa', status: 'pending', description: `M-Pesa deposit KSh ${amount}`, reference: stkRes.data.checkout_request_id, zoneId: req.user.zoneId });
+      return res.json({ pending: true, transactionId: txn._id, checkoutRequestId: stkRes.data.checkout_request_id, message: 'STK Push sent to your phone' });
     } catch (e) {
       res.status(500).json({ message: 'Error Processing transaction. Try again later.' });
     }
@@ -709,84 +722,178 @@ app.post('/api/v1/wallet/deposit', auth(), async (req, res) => {
   res.json({ success: true, newBalance: (await User.findById(req.user._id)).walletBalance });
 });
 
+app.post('/api/v1/wallet/mpesa/register-fee', auth(), async (req, res) => {
+  try {
+    // Assuming you have authentication middleware passing the user object
+    const { phoneNumber, amount } = req.body;
+    if (!req.user) {
+      return res.status(400).json({
+        success: false,
+        message: 'No account found...'
+      });
+    }
+
+    // 1. Validation
+    if (!phoneNumber || !amount) {
+      return res.status(400).json({
+        success: false,
+        message: 'Phone number and amount are required'
+      });
+    }
+
+    // Format phone number to standard Safaricom format if needed (e.g., 2547XXXXXXXX)
+    let formattedPhone = phoneNumber.trim().replace(/\+/g, '');
+    if (formattedPhone.startsWith('0')) {
+      formattedPhone = '254' + formattedPhone.slice(1);
+    }
+
+    // 2. Generate a Unique Internal Reference / Checkout Request ID
+    // If Tuma expects you to generate it, do it here. If Tuma returns one, update it later.
+    const reference = `REG-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const stkRes = await stkPush(formattedPhone, 1, reference);
+    const isSuccessful = stkRes?.success === true;
+    if (!isSuccessful) {
+      return res.status(400).json({ message: 'Failed to initiate M-Pesa STK Push', details: stkRes });
+    }
+
+    const txn = await Transaction.create({ userId: req.user._id, type: 'registration_fee', amount, method: 'mpesa', status: 'pending', description: `M-Pesa registration fee  KSh ${amount}`, reference: stkRes.data.checkout_request_id, zoneId: req.user.zoneId });
+    return res.json({ success: true, pending: true, transactionId: txn._id, checkoutRequestId: stkRes.data.checkout_request_id, message: 'STK Push initiated successfully. Please check your phone to complete payment.' });
+  } catch (e) {
+    res.status(500).json({ message: 'Error Processing transaction. Try again later.' });
+  }
+
+});
 
 app.post('/api/v1/wallet/mpesa/callback', async (req, res) => {
-  console.log('MPESA CALLBACK:', JSON.stringify(req.body, null, 2));
-  const callbackData = req.body.Body?.stkCallback;
-  if (!callbackData) return res.json({ success: true });
+  console.log('TUMA MPESA CALLBACK:', JSON.stringify(req.body, null, 2));
 
-  const ref = callbackData.CheckoutRequestID;
-  let txn = await Transaction.findOne({ reference: ref });
-  // Retry if not found
+  // Tuma delivers payload parameters at the root level
+  const { checkout_request_id, result_code, status } = req.body;
+
+  if (!checkout_request_id) {
+    return res.status(400).json({ success: false, message: 'Missing checkout_request_id' });
+  }
+
+  let txn = await Transaction.findOne({ reference: checkout_request_id });
+
+  // Retry if transaction not found immediately due to race conditions
   let retries = 3;
   while (!txn && retries > 0) {
     await new Promise(r => setTimeout(r, 1000));
-    txn = await Transaction.findOne({ reference: ref });
+    txn = await Transaction.findOne({ reference: checkout_request_id });
     retries--;
   }
+
+
+
+  if (!txn) {
+    return res.json({ success: true, message: 'Transaction not found in local records' });
+  }
+
   console.log('Txn type:', txn?.type);
   console.log('Txn orderId:', txn?.orderId);
-  if (!txn) return res.json({ success: true });
 
-  if (callbackData.ResultCode === 0) {
+  // Tuma sets result_code to 0 for successful transactions
+  if (result_code === 0 || status === 'completed') {
     console.log('Payment successful for transaction:', txn._id);
 
+    txn.status = 'completed';
+    await txn.save();
+
+    // 1. DEPOSIT TYPE
     if (txn.type === 'deposit') {
       await User.findByIdAndUpdate(txn.userId, {
         $inc: { walletBalance: txn.amount }
       });
       io.to(txn.userId.toString()).emit('deposit_confirmed', { amount: txn.amount });
+
       const uForPush = await User.findById(txn.userId).select('pushToken');
       if (uForPush?.pushToken) push.notifyDepositConfirmed(uForPush.pushToken, txn.amount);
-      Notification.create({
+
+      await Notification.create({
         title: 'Deposit Received',
         type: 'deposit_confirmed',
-        body: `Your deposit of KSh ${txn.amount} has been confirmed (${txn.status}).`,
+        body: `Your deposit of KSh ${txn.amount} has been confirmed.`,
         recipients: [{ user: txn.userId, isRead: false }],
         recipientRole: ['client', 'manager', 'admin'],
-        zoneId: req.user.zoneId,
       });
-
     }
 
+    // 2. ORDER PAYMENT TYPE
     if (txn.type === 'order_payment' && txn.orderId) {
       await Order.findByIdAndUpdate(txn.orderId, {
         paymentStatus: 'paid'
       });
       io.to(txn.userId.toString()).emit('payment_confirmed', { amount: txn.amount });
+
       const uForPush = await User.findById(txn.userId).select('pushToken');
       if (uForPush?.pushToken) push.notifyClientPaymentSuccess(uForPush.pushToken, txn.orderId.toString(), txn.amount);
-      Notification.create({
+
+      await Notification.create({
         title: 'Payment Received',
         type: 'order_payment',
-        body: `Your payment of KSh ${txn.amount} has been confirmed (${txn.status}).`,
+        body: `Your payment of KSh ${txn.amount} has been confirmed.`,
         recipients: [{ user: txn.userId, isRead: false }],
         recipientRole: ['client', 'manager', 'admin'],
-        zoneId: req.user.zoneId,
       });
     }
 
-    txn.status = 'completed';
-    await txn.save();
+    // 3. REGISTRATION FEE TYPE (NEW)
+    if (txn.type === 'registration_fee') {
+      // Updates user profile status to active
+      await User.findByIdAndUpdate(txn.userId, {
+        isActive: true,
+        isRegistered: true
+      });
+
+      io.to(txn.userId.toString()).emit('registration_activated', { status: 'active' });
+
+      const uForPush = await User.findById(txn.userId).select('pushToken');
+      if (uForPush?.pushToken) {
+        // Fallback generic push function if no custom one exists yet
+        if (typeof push.notifyRegistrationSuccess === 'function') {
+          push.notifyRegistrationSuccess(uForPush.pushToken, txn.reference, txn.amount);
+        }
+      }
+
+      await Notification.create({
+        title: 'Account Activated',
+        type: 'registration_confirmed',
+        body: `Your registration payment of KSh ${txn.amount} has been received. Your account is now active!`,
+        recipients: [{ user: txn.userId, isRead: false }],
+        recipientRole: ['client', 'manager', 'admin'],
+      });
+    }
 
   } else {
     txn.status = 'failed';
     await txn.save();
-    await Order.findOneAndDelete({ _id: txn.orderId, status: 'pending' });
+
+    if (txn.type === 'order_payment' && txn.orderId) {
+      await Order.findOneAndDelete({ _id: txn.orderId, status: 'pending' });
+    }
+
+    // Optional: Send a failure notification
+    await Notification.create({
+      title: 'Payment Failed',
+      type: 'payment_failed',
+      body: `Your payment/deposit of KSh ${txn.amount} failed.`,
+      recipients: [{ user: txn.userId, isRead: false }],
+      recipientRole: ['client', 'manager', 'admin', 'rider'],
+    });
   }
-  Notification.create({
-    title: txn.type === 'order_payment' ? 'Payment Received' : 'Deposit Confirmed',
-    type: txn.type === 'order_payment' ? 'order_payment' : 'deposit_confirmed',
-    body: `Your ${txn.type === 'order_payment' ? 'payment' : 'deposit'} of KSh ${txn.amount} has been confirmed status - ${txn.status}.`,
-    recipients: [{ user: txn.userId, isRead: false }],
-    recipientRole: ['client', 'manager', 'admin'],
-    zoneId: req.user.zoneId,
-  });
-  res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
+
+  // Return a generic success status to stop Tuma from retrying the webhook
+  return res.json({ success: true, message: 'Callback processed successfully' });
 });
+
+
+
 
 app.get('/api/v1/wallet/check-status/:reference', auth(), async (req, res) => {
   try {
+    console.log(`Checking status for Reference ID: "${req.params.reference}"`);
+
     const txn = await Transaction.findOne({ reference: req.params.reference, userId: req.user._id });
     if (!txn) return res.status(404).json({ message: 'Transaction not found' });
     res.json({ status: txn.status });
@@ -820,11 +927,10 @@ app.post('/api/v1/wallet/pay-order', auth(), async (req, res) => {
   if (!order) return res.status(404).json({ message: 'Order not found' });
   if (method === 'wallet') {
     const user = await User.findById(req.user._id);
-    if (user.walletBalance < order.total) 
-      {
-        await Transaction.findByIdAndDelete(orderId);
-        return res.status(400).json({ message: 'Insufficient wallet balance' });
-      }
+    if (user.walletBalance < order.total) {
+      await Transaction.findByIdAndDelete(orderId);
+      return res.status(400).json({ message: 'Insufficient wallet balance' });
+    }
     await User.findByIdAndUpdate(req.user._id, { $inc: { walletBalance: -order.total } });
     await Order.findByIdAndUpdate(orderId, { paymentStatus: 'paid' });
     await Transaction.create({ userId: req.user._id, type: 'order_payment', amount: -order.total, method: 'wallet', status: 'completed', orderId, description: `Payment for order ${order.reference}, zone: ${order.zoneId}`, zoneId: req.user.zoneId });
@@ -835,23 +941,21 @@ app.post('/api/v1/wallet/pay-order', auth(), async (req, res) => {
   else if (method === 'mpesa') {
     //order.total
     try {
-      const stkRes = await initiateStkPush(phone, order.total, orderId);
-      console.log('STK Response:', stkRes);
-      console.log('Initiated M-Pesa payment for order:', order._id, 'Amount:', order.total);
+      const stkRes = await stkPush(phone, 1, orderId);
       const txn = await Transaction.create({
         userId: req.user._id,
         type: 'order_payment',
         amount: order.total,
         method: 'mpesa',
         status: 'pending',
-        reference: stkRes.CheckoutRequestID,
+        reference: stkRes.data.checkout_request_id,
         orderId: order._id,
         description: `M-Pesa order payment of KSh ${order.total} for order ${order.reference}`,
       });
       res.json({
         pending: true,
         transactionId: txn._id,
-        checkoutRequestId: stkRes.CheckoutRequestID,
+        checkoutRequestId: stkRes.data.checkout_request_id,
         orderId: txn.orderId,
       });
 
@@ -859,16 +963,17 @@ app.post('/api/v1/wallet/pay-order', auth(), async (req, res) => {
       console.log(e);
       res.status(500).json({ message: 'Payment failed' });
     }
-  } else if(method === 'card') {
+  } else if (method === 'card') {
     // Integrate card payment gateway here (e.g. Stripe, PayPal)
     // For now, just return success for testing
-    await Order.findByIdAndUpdate(orderId, { paymentStatus: 'paid' });
-    await Transaction.create({ userId: req.user._id, type: 'order_payment', amount: -order.total, method: 'card', status: 'completed', orderId, description: `Card payment for order ${order.reference}, zone: ${order.zoneId}`, zoneId: req.user.zoneId });
-    const userForPush = await User.findById(req.user._id).select('pushToken');
-    if (userForPush?.pushToken) push.notifyClientPaymentSuccess(userForPush.pushToken, order.reference, order.total);
-    return res.json({ success: true, message: 'Order Payment Successful - Card' }); 
-  
-}else if(method === 'cash') {
+    //await Order.findByIdAndUpdate(orderId, { paymentStatus: 'paid' });
+    //await Transaction.create({ userId: req.user._id, type: 'order_payment', amount: -order.total, method: 'card', status: 'completed', orderId, description: `Card payment for order ${order.reference}, zone: ${order.zoneId}`, zoneId: req.user.zoneId });
+    //const userForPush = await User.findById(req.user._id).select('pushToken');
+    //if (userForPush?.pushToken) push.notifyClientPaymentSuccess(userForPush.pushToken, order.reference, order.total);
+    //return res.json({ success: true, message: 'Order Payment Successful - Card' }); 
+    return res.status(400).json({ message: 'Comming soon' });
+
+  } else if (method === 'cash') {
     return res.status(400).json({ message: 'Comming soon' });
   }
 });
@@ -890,7 +995,7 @@ app.post('/api/v1/managers', auth(['admin']), async (req, res) => {
   const { name, email, password, phone, zoneId, userName } = req.body;
   if (await User.findOne({ email })) return res.status(400).json({ message: 'Email exists' });
   const hashed = await bcrypt.hash(password, 12);
-  const manager = await User.create({ name, email, password: hashed, phone, role: 'manager', zoneId, createdBy: req.user._id, userName: userName || email.split('@')[0] });
+  const manager = await User.create({ name, email, password: hashed, phone, role: 'manager', zoneId, createdBy: req.user._id, userName: userName || email.split('@')[0], isActive: true, isVerified: true, isRegistered: true });
   res.status(201).json({ id: manager._id, name: manager.name, email: manager.email });
 });
 
@@ -919,12 +1024,12 @@ app.get('/api/v1/clients/new', auth(['manager', 'admin']), async (req, res) => {
   if (req.user.zoneId) {
     filter.zoneId = req.user.zoneId;
   }
-  if(req.user._id){
+  if (req.user._id) {
     filter.isVerified = 'false';
   }
   const clients = await User.find(filter).select('-password');
   const result = await Promise.all(clients.map(async c => {
-    return { id: c._id, name: c.name, email: c.email, phone: c.phone, zoneId: c.zoneId, walletBalance: c.walletBalance, orderCount: 0 , isVerified: c.isVerified, isAdminVerified: c.isAdminVerified, isManagerVerified: c.isManagerVerified };
+    return { id: c._id, name: c.name, email: c.email, phone: c.phone, zoneId: c.zoneId, walletBalance: c.walletBalance, orderCount: 0, isVerified: c.isVerified, isAdminVerified: c.isAdminVerified, isManagerVerified: c.isManagerVerified };
   }));
   res.json(result);
 });
@@ -941,11 +1046,11 @@ app.put('/api/v1/clients/verify', auth(['manager', 'admin']), async (req, res) =
 
 app.get('/api/v1/clients', auth(['manager', 'admin']), async (req, res) => {
   const filter = { role: 'client' };
-  if(req.user._id){
+  if (req.user._id) {
     filter.isVerified = 'true';
   }
   if (req.query.managerId) {
-    const orders = await Order.distinct('clientId', {  managerId: req.query.managerId });
+    const orders = await Order.distinct('clientId', { managerId: req.query.managerId });
     filter._id = { $in: orders };
   }
   const clients = await User.find(filter).select('-password');
@@ -958,16 +1063,16 @@ app.get('/api/v1/clients', auth(['manager', 'admin']), async (req, res) => {
 
 app.get('/api/v1/rider-clients', auth(['manager', 'admin', 'rider']), async (req, res) => {
   const filter = { role: 'client' };
-  if(req.user._id){
+  if (req.user._id) {
     filter.isVerified = 'true';
   }
   if (req.query.managerId) {
-    const orders = await Order.distinct('clientId', {  raiderId: req.query.managerId });
+    const orders = await Order.distinct('clientId', { raiderId: req.query.managerId });
     filter._id = { $in: orders };
   }
   const clients = await User.find(filter).select('-password');
   const result = await Promise.all(clients.map(async c => {
-  const orderCount = await Order.countDocuments({ clientId: c._id });
+    const orderCount = await Order.countDocuments({ clientId: c._id });
     return { id: c._id, name: c.name, email: c.email, phone: c.phone, zoneId: c.zoneId, walletBalance: c.walletBalance, orderCount, isVerified: c.isVerified, isAdminVerified: c.isAdminVerified, isManagerVerified: c.isManagerVerified };
   }));
   res.json(result);
@@ -992,7 +1097,7 @@ app.get('/api/v1/raiders', auth(['manager', 'admin']), async (req, res) => {
   }
   const riders = await User.find(filter).select('-password');
   const result = await Promise.all(riders.map(async c => {
-  const orderCount = await Order.countDocuments({ clientId: c._id });
+    const orderCount = await Order.countDocuments({ clientId: c._id });
     return { id: c._id, name: c.name, email: c.email, phone: c.phone, zoneId: c.zoneId, walletBalance: c.walletBalance, orderCount, isVerified: c.isVerified, isAdminVerified: c.isAdminVerified, isManagerVerified: c.isManagerVerified };
   }));
   res.json(result);
@@ -1015,12 +1120,32 @@ app.post('/api/v1/raiders/:id/update', auth(['manager', 'admin']), async (req, r
   }
 });
 
+app.post('/api/v1/raiders/:id/activate', auth(['manager', 'admin']), async (req, res) => {
+  try {
+    const rider = await User.findByIdAndUpdate(req.params.id, { isActive: true }, { new: true });
+    if (!rider) return res.status(404).json({ message: 'Rider not found' });
+    res.json({ success: true, rider });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+app.post('/api/v1/raiders/:id/suspend', auth(['manager', 'admin']), async (req, res) => {
+  try {
+    const rider = await User.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
+    if (!rider) return res.status(404).json({ message: 'Rider not found' });
+    res.json({ success: true, rider });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
 app.post('/api/v1/raiders', auth(['manager']), async (req, res) => {
   try {
     const { name, email, password, phone, zoneId, userName } = req.body;
     if (await User.findOne({ email })) return res.status(400).json({ message: 'Email already exists' });
     const hashed = await bcrypt.hash(password, 12);
-    const user = await User.create({ name, email: email.toLowerCase(), password: hashed, phone, role: 'rider', zoneId, managerId: req.user._id, createdBy: req.user._id, userName: userName || email.split('@')[0] });
+    const user = await User.create({ name, email: email.toLowerCase(), password: hashed, phone, role: 'rider', zoneId, managerId: req.user._id, createdBy: req.user._id, userName: userName || email.split('@')[0], isActive: true, isVerified: true, isRegistered: true });
     res.status(201).json({ id: user._id, name: user.name, email: user.email, role: user.role });
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
@@ -1048,7 +1173,7 @@ app.get('/api/v1/clients/all', auth(['admin']), async (req, res) => {
 app.get('/api/v1/clients/:id', auth(['manager', 'admin', 'rider']), async (req, res) => {
   const m = await User.findById(req.params.id).populate('zoneId', 'name');
   if (!m) return res.status(404).json({ message: 'Client not found' });
-  res.json({ id: m._id, name: m.name, email: m.email, phone: m.phone, zone: m.zoneId, balance: m.walletBalance, isVerified: m.isVerified, isAdminVerified: m.isAdminVerified, isManagerVerified: m.isManagerVerified });
+  res.json({ id: m._id, name: m.name, email: m.email, phone: m.phone, zone: m.zoneId, balance: m.walletBalance, isVerified: m.isVerified, isAdminVerified: m.isAdminVerified, isManagerVerified: m.isManagerVerified, isRegistered: m.isRegistered });
 });
 
 app.delete('/api/v1/clients/:id', auth(['manager', 'admin']), async (req, res) => {
@@ -1072,48 +1197,48 @@ app.get('/api/v1/notifications/all', auth(['admin']), async (req, res) => {
 
 app.put('/api/v1/notifications/:id/read', auth(), async (req, res) => {
   // Return all notifications for now
-  console.log("marking notification " + req.params.id + " as read for user " + req.user.id);  
- const notification = await Notification.updateOne(
-      { _id: req.params.id, "recipients.user": req.user.id },
-      { $set: { "recipients.$[elem].isRead": true,"recipients.$[elem].readAt": new Date()}},
-      { arrayFilters: [{ "elem.user": req.user.id }]}
-    );
-    if (!notification) {
-      return res.status(404).json({ message: "Notification not found" });
-    }
+  console.log("marking notification " + req.params.id + " as read for user " + req.user.id);
+  const notification = await Notification.updateOne(
+    { _id: req.params.id, "recipients.user": req.user.id },
+    { $set: { "recipients.$[elem].isRead": true, "recipients.$[elem].readAt": new Date() } },
+    { arrayFilters: [{ "elem.user": req.user.id }] }
+  );
+  if (!notification) {
+    return res.status(404).json({ message: "Notification not found" });
+  }
   res.json(notification);
 });
 
 app.put('/api/v1/notifications/read-all', auth(), async (req, res) => {
   // Return all notifications for now
-  try {    
+  try {
     const notifications = await Notification.updateMany(
       // 1. Tafuta notification ambazo mtumiaji yumo na bado hajasoma
-      { 
-        "recipients": { 
-          $elemMatch: { user: req.user.id, isRead: false } 
-        } 
+      {
+        "recipients": {
+          $elemMatch: { user: req.user.id, isRead: false }
+        }
       },
       // 2. Sasisha isRead na readAt kwa huyo mtumiaji pekee
-      { 
-        $set: { 
+      {
+        $set: {
           "recipients.$[elem].isRead": true,
           "recipients.$[elem].readAt": new Date()
-        } 
+        }
       },
       // 3. Filter ili 'elem' ilingane na userId
-      { 
+      {
         arrayFilters: [{ "elem.user": req.user.id }],
-        multi: true 
+        multi: true
       }
-    );  
-   res.json(notifications);
-  } catch (e) { 
+    );
+    res.json(notifications);
+  } catch (e) {
     console.log("error marking notifications as read for user " + req.user.id + " error " + e.message);
     return res.status(500).json({ message: 'Error marking notifications as read' });
-  } 
+  }
 
- 
+
 });
 
 app.post('/api/v1/notifications/push-token', auth(), async (req, res) => {
@@ -1184,7 +1309,7 @@ server.listen(PORT, () => {
 app.post('/api/v1/admin/subscribe-live', (req, res) => {
   res.json({ room: 'admin-room', message: 'Connect via socket and emit join_admin' });
 });
- 
+
 // ── Location history endpoint ─────────────────────────────────────
 app.get('/api/v1/users/:id/location-history', async (req, res) => {
   // In production store location history in a separate collection
