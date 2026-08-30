@@ -292,8 +292,8 @@ router.post('/register', async (req, res) => {
     await Otp.deleteMany({ userId: user._id, purpose: 'verify_register' });
     await Otp.create({ userId: user._id, phone: cleanPhone, code, purpose: 'verify_register', expiresAt: new Date(Date.now() + 20 * 60 * 1000) });
     //await sendSms(cleanPhone, `ZoneMarket: Your verification code is ${code}. Expires in 20 minutes. DO NOT share it.`);
-    /*await sendEmail(cleanEmail, 'ZoneMarket Account Verification', `<p>Hello ${name},</p><p>Your verification code is <strong>${code}</strong>. It expires in 20 minutes. DO NOT share this code with anyone.</p><p>Thank you for joining ZoneMarket!</p>`);*/
-    console.log(`Registration OTP for ${user.email}: ${code}`);
+    await sendEmail(cleanEmail, 'ZoneMarket Account Verification', `<p>Hello ${name},</p><p>Your verification code is <strong>${code}</strong>. It expires in 20 minutes. DO NOT share this code with anyone.</p><p>Thank you for joining ZoneMarket!</p>`);
+    //console.log(`Registration OTP for ${user.email}: ${code}`);
     res.status(201).json({
       success: true,
       userId: user._id,
@@ -343,7 +343,7 @@ router.post('/login', async (req, res) => {
       await Otp.deleteMany({ userId: user._id, purpose: 'verify_register' });
       await Otp.create({ userId: user._id, phone: user.phone, code, purpose: 'verify_register', expiresAt: new Date(Date.now() + 20 * 60 * 1000) });
       //await sendSms(user.phone, `ZoneMarket: Verify your account. Code: ${code}. Valid 20 mins.`);
-      /* await sendEmail(user.email, 'ZoneMarket Account Verification', `<p>Hello ${user.name},</p><p>Your verification code is <strong>${code}</strong>. It expires in 20 minutes. DO NOT share this code with anyone.</p><p>Thank you for joining ZoneMarket!</p>`);*/
+       await sendEmail(user.email, 'ZoneMarket Account Verification', `<p>Hello ${user.name},</p><p>Your verification code is <strong>${code}</strong>. It expires in 20 minutes. DO NOT share this code with anyone.</p><p>Thank you for joining ZoneMarket!</p>`);
       return res.json({ requiresVerification: true, userId: user._id, phone: maskPhone(user.email), message: 'Account not verified. A new code has been sent to your email.' });
     }
 
@@ -419,7 +419,7 @@ router.post('/login', async (req, res) => {
     await Otp.deleteMany({ userId: user._id, purpose: 'verify_login' });
     const otp = await Otp.create({ userId: user._id, phone: user.phone, code, purpose: 'verify_login', expiresAt: new Date(Date.now() + 20 * 60 * 1000) });
     // await sendSms(user.phone, `ZoneMarket login code: ${code}\nValid 20 minutes. Never share this code with anyone.`);
-    /*await sendEmail(user.email, 'ZoneMarket Login Code', `<p>Hello ${user.name},</p><p>Your login code is <strong>${code}</strong>. It expires in 20 minutes. Never share this code with anyone.</p>`);*/
+    await sendEmail(user.email, 'ZoneMarket Login Code', `<p>Hello ${user.name},</p><p>Your login code is <strong>${code}</strong>. It expires in 20 minutes. Never share this code with anyone.</p>`);
     console.log(`Login OTP for ${user.email}: ${code}`); // Log OTP for testing without SMS
     res.json({
       success: true,
@@ -492,8 +492,8 @@ router.post('/resend-otp', async (req, res) => {
     await Otp.updateMany({ userId, purpose: purpose || 'verify_login', used: false }, { used: true });
     const code = generateOtp();
     await Otp.create({ userId, phone: user.phone, code, purpose: purpose || 'verify_login', expiresAt: new Date(Date.now() + 20 * 60 * 1000) });
-    //await sendSms(user.phone, `ZoneMarket: Your new code is ${code}. Expires in 20 minutes.`);
-    console.log(`Login OTP for ${user.email}: ${code}`);
+   // await sendSms(user.phone, `ZoneMarket: Your new code is ${code}. Expires in 20 minutes.`);
+    await sendEmail(user.email, 'ZoneMarket Login Code', `<p>Hello ${user.name},</p><p>Your login code is <strong>${code}</strong>. It expires in 20 minutes. Never share this code with anyone.</p>`);
     res.json({ success: true, message: `New code sent to ${maskPhone(user.email)} expires in 20 minutes.` });
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
