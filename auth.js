@@ -686,9 +686,7 @@ router.post('/verify-update', async (req, res) => {
 
         // 6. Hash the new password and update user profile
         const hashedPassword = await bcrypt.hash(newPassword, 12);
-        user.password = hashedPassword;
-        await user.save();
-
+        await User.findByIdAndUpdate(otpRecord.userId, { password: hashedPassword });
         // 7. Securely burn the OTP only AFTER database operations succeed
         await Otp.findByIdAndUpdate(otpRecord._id, { used: true });
 
