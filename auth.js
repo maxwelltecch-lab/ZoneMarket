@@ -638,7 +638,7 @@ router.post('/reset-password', async (req, res) => {
     const otpCode = generateOtp();
     await Otp.deleteMany({ userId: user._id, purpose: 'reset_password' });
     await Otp.create({ userId: user._id, phone: user.phone, code: otpCode, purpose: 'reset_password', expiresAt: new Date(Date.now() + 20 * 60 * 1000) });
-    /*sendEmail(email, 'ZoneMarket Password Reset', `<p>Hello ${user.name},</p><p>Your password reset code is <strong>${otpCode}</strong>. It expires in 20 minutes. DO NOT share this code with anyone.</p><p>If you did not request a password reset, please ignore this email.</p>`);*/
+    sendEmail(email, 'ZoneMarket Password Reset', `<p>Hello ${user.name},</p><p>Your password reset code is <strong>${otpCode}</strong>. It expires in 20 minutes. DO NOT share this code with anyone.</p><p>If you did not request a password reset, please ignore this email.</p>`);
     console.log(`Reset Password OTP for ${user.email}: ${otpCode}`);
     res.json({ success: true, message: 'Password reset instructions sent to your email' });
   } catch (e) {
@@ -648,37 +648,58 @@ router.post('/reset-password', async (req, res) => {
 });
 
 router.post('/verify-update', async (req, res) => {
-  try {
-    const { otp, newPassword } = req.body;
-    if (!otp || !newPassword) {
-      return res.status(400).json({ message: 'OTP and new password are required' });
-    }
-    const User = mongoose.model('User');
-    const otpRecord = await Otp.findOne({ code: otp, purpose: 'reset_password', used: false, expiresAt: { $gt: new Date() } });
-    if (!otpRecord) {
-      return res.status(400).json({ message: 'Invalid or expired OTP' });
-    }
-    if (otpRecord.attempts >= 5) return res.status(400).json({ message: 'Too many wrong attempts. Request a new code.' });
+    try {
+        const { otp, newPassword } = req.body;
 
-    if (otpRecord.code !== otp.toString().trim()) {
-      await Otp.findByIdAndUpdate(otpRecord._id, { $inc: { attempts: 1 } });
-      const rem = 4 - otpRecord.attempts;
-      return res.status(400).json({ message: `Wrong code. ${rem} attempt${rem !== 1 ? 's' : ''} left.` });
+        // 1. Validate input existence
+        if (!otp || !newPassword) {
+            return res.status(400).json({ message: 'OTP and new password are required' });
+        }
+
+        const User = mongoose.model('User');
+        const formattedOtp = otp.toString().trim();
+
+        // 2. Find the OTP record by the code itself
+        // (If your OTPs aren't unique across the system, you should pass a userId/email here too)
+        const otpRecord = await Otp.findOne({ 
+            code: formattedOtp, 
+            purpose: 'reset_password', 
+            used: false, 
+            expiresAt: { $gt: new Date() } 
+        });
+
+        // 3. Handle invalid or expired OTP
+        if (!otpRecord) {
+            return res.status(400).json({ message: 'Invalid or expired OTP' });
+        }
+
+        // 4. Check for brute-force attempts
+        if (otpRecord.attempts >= 5) {
+            return res.status(400).json({ message: 'Too many wrong attempts. Request a new code.' });
+        }
+
+        // 5. Locate the associated user
+        const user = await User.findOne({ _id: otpRecord.userId });
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        // 6. Hash the new password and update user profile
+        const hashedPassword = await bcrypt.hash(newPassword, 12);
+        user.password = hashedPassword;
+        await user.save();
+
+        // 7. Securely burn the OTP only AFTER database operations succeed
+        await Otp.findByIdAndUpdate(otpRecord._id, { used: true });
+
+        res.json({ success: true, message: 'Password changed successfully' });
+
+    } catch (e) {
+        console.error('Change password error:', e);
+        res.status(500).json({ message: 'An internal server error occurred' });
     }
-    await Otp.findByIdAndUpdate(otpRecord._id, { used: true });
-    const user = await User.findOne({ _id: otpRecord.userId });
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-    const hashedPassword = await bcrypt.hash(newPassword, 12);
-    user.password = hashedPassword;
-    await user.save();
-    res.json({ success: true, message: 'Password changed successfully' });
-  } catch (e) {
-    console.error('Change password error:', e);
-    res.status(500).json({ message: e.message });
-  }
 });
+
 
 
 module.exports = { router, Otp, Referral2, buildUserPayload, generateReferralCode, updateReferralActivity };
